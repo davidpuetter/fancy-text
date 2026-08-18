@@ -37,17 +37,25 @@ function TextRenderer:_Init()
 		table.insert(self._characters, TextCharacter.new(c, self._config, self._container))
 	end
 
-	if self._config.Scale then
-		local inner = self._trove:Add(Instance.new("Frame"))
-		inner.Size = UDim2.fromScale(1, 1)
-		inner.BackgroundTransparency = 1
-		inner.Parent = self._container
+	-- Render in a zero-sized direct child so its positioned glyph descendants do
+	-- not participate in an AutomaticSize container's bounds calculation.
+	-- The frame does not clip, so glyphs still display at their calculated offsets.
+	local inner = self._trove:Add(Instance.new("Frame"))
+	inner.Name = "FancyTextRenderLayer"
+	inner.Size = UDim2.fromOffset(0, 0)
+	inner.AutomaticSize = Enum.AutomaticSize.None
+	inner.BackgroundTransparency = 1
+	inner.BorderSizePixel = 0
+	inner.ClipsDescendants = false
+	inner.Parent = self._container
 
+	self._render_container = inner
+
+	if self._config.Scale then
 		local scale = self._trove:Add(Instance.new("UIScale"))
-		scale.Scale = Util.GetUIScale()
+		scale.Scale = 1
 		scale.Parent = inner
 
-		self._render_container = inner
 		self._ui_scale = scale
 	end
 
@@ -96,15 +104,34 @@ end
 
 -- re-wraps and repositions/recreates all characters; safe to call repeatedly
 function TextRenderer:_Layout()
-	local ui_scale = self._config.Scale and Util.GetUIScale() or 1
+	local ancestor_scale = Util.GetAncestorUIScale(self._container)
+	if ancestor_scale <= 0 then
+		ancestor_scale = 1
+	end
+
+	local target_scale = self._config.Scale and Util.GetUIScale() or 1
+	local internal_scale = self._config.Scale and (target_scale / ancestor_scale) or 1
+	if internal_scale <= 0 then
+		internal_scale = 1
+	end
+
+	-- keep layout-space stable against tiny floating-point mismatch between
+	-- target_scale and ancestor_scale*internal_scale, which can shift wraps by 1 char.
+	local layout_scale = self._config.Scale and target_scale or ancestor_scale
 	local container_size = self._container.AbsoluteSize
 
 	-- skip if nothing changed, avoids AutomaticSize feedback loops from recreating instances
-	if self._last_layout_size == container_size and self._last_layout_scale == ui_scale then
+	if
+		self._last_layout_size == container_size
+		and self._last_layout_scale == layout_scale
+		and self._last_internal_scale == internal_scale
+	then
 		return
 	end
 	self._last_layout_size = container_size
-	self._last_layout_scale = ui_scale
+	self._last_layout_scale = layout_scale
+	self._last_internal_scale = internal_scale
+	self._layout_scale = layout_scale
 
 	self._render_trove:Clean()
 	self._effect_args = {}
@@ -118,16 +145,14 @@ function TextRenderer:_Layout()
 	end
 
 	if self._ui_scale then
-		self._ui_scale.Scale = ui_scale
-		-- compensates UIScale>1 inflating AutomaticSize ancestors (pushed text off-center >1080p)
-		self._render_container.Size = UDim2.fromScale(1 / ui_scale, 1 / ui_scale)
+		self._ui_scale.Scale = internal_scale
 	end
 
 	-- queued here, run after vertical offset below so Inits see final positions
 	self._pending_inits = {}
 
 	local layout_mgr =
-		TextLayoutManager.new(self._characters, self._container, self._config.CustomFont ~= nil, ui_scale)
+		TextLayoutManager.new(self._characters, self._container, self._config.CustomFont ~= nil, layout_scale)
 
 	local total_height = layout_mgr:Init(function(...)
 		self:_FlushLine(...)
@@ -136,12 +161,10 @@ function TextRenderer:_Layout()
 	-- Calculate and apply vertical offset
 	local vertical_offset = 0
 	if self._config.VerticalAlign == "Center" then
-		local container_height = self._config.Scale and (self._container.AbsoluteSize.Y / ui_scale)
-			or self._container.AbsoluteSize.Y
+		local container_height = self._container.AbsoluteSize.Y / layout_scale
 		vertical_offset = math.max(0, (container_height - total_height) / 2)
 	elseif self._config.VerticalAlign == "Bottom" then
-		local container_height = self._config.Scale and (self._container.AbsoluteSize.Y / ui_scale)
-			or self._container.AbsoluteSize.Y
+		local container_height = self._container.AbsoluteSize.Y / layout_scale
 		vertical_offset = math.max(0, container_height - total_height)
 	end
 
@@ -239,9 +262,8 @@ function TextRenderer:_FlushLine(chars_to_render, line_width, line_height)
 
 	-- left alignment uses 0 (default)
 	local line_start_x = 0
-
-	local container_width = self._config.Scale and (self._container.AbsoluteSize.X / Util.GetUIScale())
-		or self._container.AbsoluteSize.X
+	local layout_scale = self._layout_scale or 1
+	local container_width = self._container.AbsoluteSize.X / layout_scale
 
 	if self._config.TextAlign == "Center" then
 		line_start_x = (container_width - line_width) / 2

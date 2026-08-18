@@ -28,14 +28,14 @@ function TextLayoutManager:Init(flush_callback)
 
 		-- implement actual newline character
 		if char == "\n" then
-			self:_Flush()
+			self:_Flush(false)
 			i += 1
 			continue
 		end
 
 		-- implement \n (literal backslash + n)
 		if char == "\\" and self._chars[i + 1] and self._chars[i + 1]:GetChar() == "n" then
-			self:_Flush()
+			self:_Flush(false)
 			i += 2
 			continue
 		end
@@ -48,7 +48,7 @@ function TextLayoutManager:Init(flush_callback)
 			local wrap_width = self._frame_size.X / self._ui_scale
 
 			if self._line_width > 0 and (self._line_width + word_size > wrap_width) then
-				self:_Flush()
+				self:_Flush(false)
 			end
 		end
 
@@ -75,7 +75,7 @@ function TextLayoutManager:Init(flush_callback)
 		i += 1
 	end
 
-	self:_Flush()
+	self:_Flush(true)
 
 	-- return total height for vertical alignment calculations
 	return self._total_height
@@ -124,7 +124,26 @@ function TextLayoutManager:_GetWordSize(index): (number, number)
 	return word_size, word_length
 end
 
-function TextLayoutManager:_Flush()
+function TextLayoutManager:_Flush(is_final: boolean?)
+	if is_final and #self._current_line > 0 then
+		local has_visible_chars = false
+		for _, line_entry in self._current_line do
+			local ch = line_entry.CharObj:GetChar()
+			if ch ~= " " and ch ~= "\t" and ch ~= "\r" and ch ~= "\n" then
+				has_visible_chars = true
+				break
+			end
+		end
+
+		if not has_visible_chars then
+			self._current_line = {}
+			self._line_width = 0
+			self._line_height_increment = 0
+			self._total_height = self._line_height
+			return
+		end
+	end
+
 	self._callback(self._current_line, self._line_width, self._line_height)
 
 	self._line_height += self._line_height_increment

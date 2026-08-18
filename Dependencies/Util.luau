@@ -90,6 +90,26 @@ function util.Reconcile(a, b)
 	end
 end
 
+-- multiply every UIScale that affects this GuiObject (self + ancestors).
+-- this gives the world-space/ui-space conversion factor for layout math.
+function util.GetAncestorUIScale(gui_obj: Instance?): number
+	local scale = 1
+	local current = gui_obj
+
+	while current do
+		if current:IsA("GuiObject") then
+			for _, child in current:GetChildren() do
+				if child:IsA("UIScale") then
+					scale *= child.Scale
+				end
+			end
+		end
+		current = current.Parent
+	end
+
+	return scale
+end
+
 -- get ui scale relative to 1920x1080 (geometric mean of both axis ratios,
 -- avoids one crushed axis dominating the scale on aspect ratios far from 16:9)
 function util.GetUIScale()
